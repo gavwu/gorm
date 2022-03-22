@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"sync"
 	"testing"
 
 	"gorm.io/gorm"
@@ -13,7 +14,7 @@ import (
 )
 
 func TestPreloadWithAssociations(t *testing.T) {
-	var user = *GetUser("preload_with_associations", Config{
+	user := *GetUser("preload_with_associations", Config{
 		Account:   true,
 		Pets:      2,
 		Toys:      3,
@@ -34,7 +35,7 @@ func TestPreloadWithAssociations(t *testing.T) {
 	DB.Preload(clause.Associations).Find(&user2, "id = ?", user.ID)
 	CheckUser(t, user2, user)
 
-	var user3 = *GetUser("preload_with_associations_new", Config{
+	user3 := *GetUser("preload_with_associations_new", Config{
 		Account:   true,
 		Pets:      2,
 		Toys:      3,
@@ -50,7 +51,7 @@ func TestPreloadWithAssociations(t *testing.T) {
 }
 
 func TestNestedPreload(t *testing.T) {
-	var user = *GetUser("nested_preload", Config{Pets: 2})
+	user := *GetUser("nested_preload", Config{Pets: 2})
 
 	for idx, pet := range user.Pets {
 		pet.Toy = Toy{Name: "toy_nested_preload_" + strconv.Itoa(idx+1)}
@@ -62,12 +63,19 @@ func TestNestedPreload(t *testing.T) {
 
 	var user2 User
 	DB.Preload("Pets.Toy").Find(&user2, "id = ?", user.ID)
-
 	CheckUser(t, user2, user)
+
+	var user3 User
+	DB.Preload(clause.Associations+"."+clause.Associations).Find(&user3, "id = ?", user.ID)
+	CheckUser(t, user3, user)
+
+	var user4 *User
+	DB.Preload("Pets.Toy").Find(&user4, "id = ?", user.ID)
+	CheckUser(t, *user4, user)
 }
 
 func TestNestedPreloadForSlice(t *testing.T) {
-	var users = []User{
+	users := []User{
 		*GetUser("slice_nested_preload_1", Config{Pets: 2}),
 		*GetUser("slice_nested_preload_2", Config{Pets: 0}),
 		*GetUser("slice_nested_preload_3", Config{Pets: 3}),
@@ -97,7 +105,7 @@ func TestNestedPreloadForSlice(t *testing.T) {
 }
 
 func TestPreloadWithConds(t *testing.T) {
-	var users = []User{
+	users := []User{
 		*GetUser("slice_nested_preload_1", Config{Account: true}),
 		*GetUser("slice_nested_preload_2", Config{Account: false}),
 		*GetUser("slice_nested_preload_3", Config{Account: true}),
@@ -139,10 +147,23 @@ func TestPreloadWithConds(t *testing.T) {
 	for i, u := range users3 {
 		CheckUser(t, u, users[i])
 	}
+
+	var user4 User
+	DB.Delete(&users3[0].Account)
+
+	if err := DB.Preload(clause.Associations).Take(&user4, "id = ?", users3[0].ID).Error; err != nil || user4.Account.ID != 0 {
+		t.Errorf("failed to query, got error %v, account: %#v", err, user4.Account)
+	}
+
+	if err := DB.Preload(clause.Associations, func(tx *gorm.DB) *gorm.DB {
+		return tx.Unscoped()
+	}).Take(&user4, "id = ?", users3[0].ID).Error; err != nil || user4.Account.ID == 0 {
+		t.Errorf("failed to query, got error %v, account: %#v", err, user4.Account)
+	}
 }
 
 func TestNestedPreloadWithConds(t *testing.T) {
-	var users = []User{
+	users := []User{
 		*GetUser("slice_nested_preload_1", Config{Pets: 2}),
 		*GetUser("slice_nested_preload_2", Config{Pets: 0}),
 		*GetUser("slice_nested_preload_3", Config{Pets: 3}),
@@ -192,7 +213,7 @@ func TestNestedPreloadWithConds(t *testing.T) {
 }
 
 func TestPreloadEmptyData(t *testing.T) {
-	var user = *GetUser("user_without_associations", Config{})
+	user := *GetUser("user_without_associations", Config{})
 	DB.Create(&user)
 
 	DB.Preload("Team").Preload("Languages").Preload("Friends").First(&user, "name = ?", user.Name)
@@ -211,4 +232,40 @@ func TestPreloadEmptyData(t *testing.T) {
 	} else if !regexp.MustCompile(`"Team":\[\],"Languages":\[\],"Friends":\[\]`).MatchString(string(r)) {
 		t.Errorf("json marshal is not empty slice, got %v", string(r))
 	}
+}
+
+func TestPreloadGoroutine(t *testing.T) {
+	var wg sync.WaitGroup
+
+	wg.Add(10)
+	for i := 0; i < 10; i++ {
+		go func() {
+			defer wg.Done()
+			var user2 []User
+			tx := DB.Where("id = ?", 1).Session(&gorm.Session{})
+
+			if err := tx.Preload("Team").Find(&user2).Error; err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestPreloadWithDiffModel(t *testing.T) {
+	user := *GetUser("preload_with_diff_model", Config{Account: true})
+
+	if err := DB.Create(&user).Error; err != nil {
+		t.Fatalf("errors happened when create: %v", err)
+	}
+
+	var result struct {
+		Something string
+		User
+	}
+
+	DB.Model(User{}).Preload("Account", clause.Eq{Column: "number", Value: user.Account.Number}).Select(
+		"users.*, 'yo' as something").First(&result, "name = ?", user.Name)
+
+	CheckUser(t, user, result.User)
 }

@@ -17,7 +17,7 @@ import (
 )
 
 func TestFind(t *testing.T) {
-	var users = []User{
+	users := []User{
 		*GetUser("find", Config{}),
 		*GetUser("find", Config{}),
 		*GetUser("find", Config{}),
@@ -57,7 +57,7 @@ func TestFind(t *testing.T) {
 	}
 
 	t.Run("FirstMap", func(t *testing.T) {
-		var first = map[string]interface{}{}
+		first := map[string]interface{}{}
 		if err := DB.Model(&User{}).Where("name = ?", "find").First(first).Error; err != nil {
 			t.Errorf("errors happened when query first: %v", err)
 		} else {
@@ -88,7 +88,7 @@ func TestFind(t *testing.T) {
 	})
 
 	t.Run("FirstMapWithTable", func(t *testing.T) {
-		var first = map[string]interface{}{}
+		first := map[string]interface{}{}
 		if err := DB.Table("users").Where("name = ?", "find").Find(first).Error; err != nil {
 			t.Errorf("errors happened when query first: %v", err)
 		} else {
@@ -120,7 +120,7 @@ func TestFind(t *testing.T) {
 	})
 
 	t.Run("FirstPtrMap", func(t *testing.T) {
-		var first = map[string]interface{}{}
+		first := map[string]interface{}{}
 		if err := DB.Model(&User{}).Where("name = ?", "find").First(&first).Error; err != nil {
 			t.Errorf("errors happened when query first: %v", err)
 		} else {
@@ -135,7 +135,7 @@ func TestFind(t *testing.T) {
 	})
 
 	t.Run("FirstSliceOfMap", func(t *testing.T) {
-		var allMap = []map[string]interface{}{}
+		allMap := []map[string]interface{}{}
 		if err := DB.Model(&User{}).Where("name = ?", "find").Find(&allMap).Error; err != nil {
 			t.Errorf("errors happened when query find: %v", err)
 		} else {
@@ -170,7 +170,7 @@ func TestFind(t *testing.T) {
 	})
 
 	t.Run("FindSliceOfMapWithTable", func(t *testing.T) {
-		var allMap = []map[string]interface{}{}
+		allMap := []map[string]interface{}{}
 		if err := DB.Table("users").Where("name = ?", "find").Find(&allMap).Error; err != nil {
 			t.Errorf("errors happened when query find: %v", err)
 		} else {
@@ -241,7 +241,7 @@ func TestQueryWithAssociation(t *testing.T) {
 }
 
 func TestFindInBatches(t *testing.T) {
-	var users = []User{
+	users := []User{
 		*GetUser("find_in_batches", Config{}),
 		*GetUser("find_in_batches", Config{}),
 		*GetUser("find_in_batches", Config{}),
@@ -289,6 +289,38 @@ func TestFindInBatches(t *testing.T) {
 	DB.Model(&User{}).Where("name = ?", "find_in_batches_new").Count(&count)
 	if count != 6 {
 		t.Errorf("incorrect count after update, expects: %v, got %v", 6, count)
+	}
+}
+
+func TestFindInBatchesWithError(t *testing.T) {
+	if name := DB.Dialector.Name(); name == "sqlserver" {
+		t.Skip("skip sqlserver due to it will raise data race for invalid sql")
+	}
+
+	users := []User{
+		*GetUser("find_in_batches_with_error", Config{}),
+		*GetUser("find_in_batches_with_error", Config{}),
+		*GetUser("find_in_batches_with_error", Config{}),
+		*GetUser("find_in_batches_with_error", Config{}),
+		*GetUser("find_in_batches_with_error", Config{}),
+		*GetUser("find_in_batches_with_error", Config{}),
+	}
+
+	DB.Create(&users)
+
+	var (
+		results    []User
+		totalBatch int
+	)
+
+	if result := DB.Table("wrong_table").Where("name = ?", users[0].Name).FindInBatches(&results, 2, func(tx *gorm.DB, batch int) error {
+		totalBatch += batch
+		return nil
+	}); result.Error == nil || result.RowsAffected > 0 {
+		t.Fatal("expected errors to have occurred, but nothing happened")
+	}
+	if totalBatch != 0 {
+		t.Fatalf("incorrect total batch, expected: %v, got: %v", 0, totalBatch)
 	}
 }
 
@@ -348,6 +380,39 @@ func TestFillSmallerStruct(t *testing.T) {
 	}
 }
 
+func TestFillSmallerStructWithAllFields(t *testing.T) {
+	user := User{Name: "SmallerUser", Age: 100}
+	DB.Save(&user)
+	type SimpleUser struct {
+		ID        int64
+		Name      string
+		UpdatedAt time.Time
+		CreatedAt time.Time
+	}
+	var simpleUsers []SimpleUser
+	dryDB := DB.Session(&gorm.Session{DryRun: true, QueryFields: true})
+
+	result := dryDB.Model(&User{}).Find(&simpleUsers, user.ID)
+	if !regexp.MustCompile("SELECT .users.*id.*users.*name.*users.*updated_at.*users.*created_at.* FROM .*users").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("SQL should include selected names, but got %v", result.Statement.SQL.String())
+	}
+
+	result = dryDB.Model(&User{}).Find(&User{}, user.ID)
+	if regexp.MustCompile("SELECT \\* FROM .*users").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("SQL should not include a * wildcard, but got %v", result.Statement.SQL.String())
+	}
+
+	result = dryDB.Model(&User{}).Find(&[]User{}, user.ID)
+	if regexp.MustCompile("SELECT \\* FROM .*users").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("SQL should not include a * wildcard, but got %v", result.Statement.SQL.String())
+	}
+
+	result = dryDB.Model(&User{}).Find(&[]*User{}, user.ID)
+	if regexp.MustCompile("SELECT \\* FROM .*users").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("SQL should not include a * wildcard, but got %v", result.Statement.SQL.String())
+	}
+}
+
 func TestNot(t *testing.T) {
 	dryDB := DB.Session(&gorm.Session{DryRun: true})
 
@@ -368,6 +433,11 @@ func TestNot(t *testing.T) {
 
 	result = dryDB.Not("name = ?", "jinzhu").Find(&User{})
 	if !regexp.MustCompile("SELECT \\* FROM .*users.* WHERE NOT.*name.* = .+").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build NOT condition, but got %v", result.Statement.SQL.String())
+	}
+
+	result = dryDB.Not(map[string]interface{}{"name": []string{}}).Find(&User{})
+	if !regexp.MustCompile("SELECT \\* FROM .*users.* WHERE .*name.* IS NOT NULL").MatchString(result.Statement.SQL.String()) {
 		t.Fatalf("Build NOT condition, but got %v", result.Statement.SQL.String())
 	}
 
@@ -392,10 +462,73 @@ func TestNot(t *testing.T) {
 	}
 }
 
+func TestNotWithAllFields(t *testing.T) {
+	dryDB := DB.Session(&gorm.Session{DryRun: true, QueryFields: true})
+	userQuery := "SELECT .*users.*id.*users.*created_at.*users.*updated_at.*users.*deleted_at.*users.*name" +
+		".*users.*age.*users.*birthday.*users.*company_id.*users.*manager_id.*users.*active.* FROM .*users.* "
+
+	result := dryDB.Not(map[string]interface{}{"users.name": "jinzhu"}).Find(&User{})
+
+	if !regexp.MustCompile(userQuery + "WHERE .*users.*name.* <> .+").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build NOT condition, but got %v", result.Statement.SQL.String())
+	}
+
+	result = dryDB.Where("users.name = ?", "jinzhu1").Not("users.name = ?", "jinzhu2").Find(&User{})
+	if !regexp.MustCompile(userQuery + "WHERE .*users.*name.* = .+ AND NOT .*users.*name.* = .+").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build NOT condition, but got %v", result.Statement.SQL.String())
+	}
+
+	result = dryDB.Where(map[string]interface{}{"users.name": []string{"jinzhu", "jinzhu 2"}}).Find(&User{})
+	if !regexp.MustCompile(userQuery + "WHERE .*users.*name.* IN \\(.+,.+\\)").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build NOT condition, but got %v", result.Statement.SQL.String())
+	}
+
+	result = dryDB.Not("users.name = ?", "jinzhu").Find(&User{})
+	if !regexp.MustCompile(userQuery + "WHERE NOT .*users.*name.* = .+").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build NOT condition, but got %v", result.Statement.SQL.String())
+	}
+
+	result = dryDB.Not(map[string]interface{}{"users.name": []string{"jinzhu", "jinzhu 2"}}).Find(&User{})
+	if !regexp.MustCompile(userQuery + "WHERE .*users.*name.* NOT IN \\(.+,.+\\)").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build NOT condition, but got %v", result.Statement.SQL.String())
+	}
+
+	result = dryDB.Not([]int64{1, 2}).First(&User{})
+	if !regexp.MustCompile(userQuery + "WHERE .*users.*id.* NOT IN \\(.+,.+\\)").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build NOT condition, but got %v", result.Statement.SQL.String())
+	}
+
+	result = dryDB.Not([]int64{}).First(&User{})
+	if !regexp.MustCompile(userQuery + "WHERE .users.\\..deleted_at. IS NULL ORDER BY").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build NOT condition, but got %v", result.Statement.SQL.String())
+	}
+
+	result = dryDB.Not(User{Name: "jinzhu", Age: 18}).First(&User{})
+	if !regexp.MustCompile(userQuery + "WHERE .*users.*..*name.* <> .+ AND .*users.*..*age.* <> .+").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build NOT condition, but got %v", result.Statement.SQL.String())
+	}
+}
+
 func TestOr(t *testing.T) {
 	dryDB := DB.Session(&gorm.Session{DryRun: true})
 
-	result := dryDB.Where("role = ?", "admin").Or("role = ?", "super_admin").Find(&User{})
+	var count int64
+	result := dryDB.Model(&User{}).Or("role = ?", "admin").Count(&count)
+	if !regexp.MustCompile("SELECT count\\(\\*\\) FROM .*users.* WHERE role = .+ AND .*users.*\\..*deleted_at.* IS NULL").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build OR condition, but got %v", result.Statement.SQL.String())
+	}
+
+	result = dryDB.Where("role = ?", "admin").Where(DB.Or("role = ?", "super_admin")).Find(&User{})
+	if !regexp.MustCompile("SELECT \\* FROM .*users.* WHERE .*role.* = .+ AND .*role.* = .+").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build OR condition, but got %v", result.Statement.SQL.String())
+	}
+
+	result = dryDB.Where("role = ?", "admin").Where(DB.Or("role = ?", "super_admin").Or("role = ?", "admin")).Find(&User{})
+	if !regexp.MustCompile("SELECT \\* FROM .*users.* WHERE .*role.* = .+ AND (.*role.* = .+ OR .*role.* = .+)").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build OR condition, but got %v", result.Statement.SQL.String())
+	}
+
+	result = dryDB.Where("role = ?", "admin").Or("role = ?", "super_admin").Find(&User{})
 	if !regexp.MustCompile("SELECT \\* FROM .*users.* WHERE .*role.* = .+ OR .*role.* = .+").MatchString(result.Statement.SQL.String()) {
 		t.Fatalf("Build OR condition, but got %v", result.Statement.SQL.String())
 	}
@@ -407,6 +540,27 @@ func TestOr(t *testing.T) {
 
 	result = dryDB.Where("name = ?", "jinzhu").Or(map[string]interface{}{"name": "jinzhu 2", "age": 18}).Find(&User{})
 	if !regexp.MustCompile("SELECT \\* FROM .*users.* WHERE .*name.* = .+ OR \\(.*age.* AND .*name.*\\)").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build OR condition, but got %v", result.Statement.SQL.String())
+	}
+}
+
+func TestOrWithAllFields(t *testing.T) {
+	dryDB := DB.Session(&gorm.Session{DryRun: true, QueryFields: true})
+	userQuery := "SELECT .*users.*id.*users.*created_at.*users.*updated_at.*users.*deleted_at.*users.*name" +
+		".*users.*age.*users.*birthday.*users.*company_id.*users.*manager_id.*users.*active.* FROM .*users.* "
+
+	result := dryDB.Where("role = ?", "admin").Or("role = ?", "super_admin").Find(&User{})
+	if !regexp.MustCompile(userQuery + "WHERE .*role.* = .+ OR .*role.* = .+").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build OR condition, but got %v", result.Statement.SQL.String())
+	}
+
+	result = dryDB.Where("users.name = ?", "jinzhu").Or(User{Name: "jinzhu 2", Age: 18}).Find(&User{})
+	if !regexp.MustCompile(userQuery + "WHERE .*users.*name.* = .+ OR \\(.*users.*name.* AND .*users.*age.*\\)").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build OR condition, but got %v", result.Statement.SQL.String())
+	}
+
+	result = dryDB.Where("users.name = ?", "jinzhu").Or(map[string]interface{}{"name": "jinzhu 2", "age": 18}).Find(&User{})
+	if !regexp.MustCompile(userQuery + "WHERE .*users.*name.* = .+ OR \\(.*age.* AND .*name.*\\)").MatchString(result.Statement.SQL.String()) {
 		t.Fatalf("Build OR condition, but got %v", result.Statement.SQL.String())
 	}
 }
@@ -429,7 +583,9 @@ func TestPluck(t *testing.T) {
 	if err := DB.Model(User{}).Where("name like ?", "pluck-user%").Order("name desc").Pluck("name", &names2).Error; err != nil {
 		t.Errorf("got error when pluck name: %v", err)
 	}
-	AssertEqual(t, names, sort.Reverse(sort.StringSlice(names2)))
+
+	sort.Slice(names2, func(i, j int) bool { return names2[i] < names2[j] })
+	AssertEqual(t, names, names2)
 
 	var ids []int
 	if err := DB.Model(User{}).Where("name like ?", "pluck-user%").Pluck("id", &ids).Error; err != nil {
@@ -511,11 +667,21 @@ func TestSelect(t *testing.T) {
 		t.Fatalf("Build Select with slice, but got %v", r.Statement.SQL.String())
 	}
 
+	// SELECT COALESCE(age,'42') FROM users;
 	r = dryDB.Table("users").Select("COALESCE(age,?)", 42).Find(&User{})
 	if !regexp.MustCompile(`SELECT COALESCE\(age,.*\) FROM .*users.*`).MatchString(r.Statement.SQL.String()) {
 		t.Fatalf("Build Select with func, but got %v", r.Statement.SQL.String())
 	}
-	// SELECT COALESCE(age,'42') FROM users;
+
+	// named arguments
+	r = dryDB.Table("users").Select("COALESCE(age, @default)", sql.Named("default", 42)).Find(&User{})
+	if !regexp.MustCompile(`SELECT COALESCE\(age,.*\) FROM .*users.*`).MatchString(r.Statement.SQL.String()) {
+		t.Fatalf("Build Select with func, but got %v", r.Statement.SQL.String())
+	}
+
+	if _, err := DB.Table("users").Select("COALESCE(age,?)", "42").Rows(); err != nil {
+		t.Fatalf("Failed, got error: %v", err)
+	}
 
 	r = dryDB.Select("u.*").Table("users as u").First(&User{}, user.ID)
 	if !regexp.MustCompile(`SELECT u\.\* FROM .*users.*`).MatchString(r.Statement.SQL.String()) {
@@ -543,6 +709,30 @@ func TestOmit(t *testing.T) {
 	}
 }
 
+func TestOmitWithAllFields(t *testing.T) {
+	user := User{Name: "OmitUser1", Age: 20}
+	DB.Save(&user)
+
+	var userResult User
+	DB.Session(&gorm.Session{QueryFields: true}).Where("users.name = ?", user.Name).Omit("name").Find(&userResult)
+	if userResult.ID == 0 {
+		t.Errorf("Should not have ID because only selected name, %+v", userResult.ID)
+	}
+
+	if userResult.Name != "" || userResult.Age != 20 {
+		t.Errorf("User Name should be omitted, got %v, Age should be ok, got %v", userResult.Name, userResult.Age)
+	}
+
+	dryDB := DB.Session(&gorm.Session{DryRun: true, QueryFields: true})
+	userQuery := "SELECT .*users.*id.*users.*created_at.*users.*updated_at.*users.*deleted_at.*users.*birthday" +
+		".*users.*company_id.*users.*manager_id.*users.*active.* FROM .*users.* "
+
+	result := dryDB.Omit("name, age").Find(&User{})
+	if !regexp.MustCompile(userQuery).MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("SQL must include table name and selected fields, got %v", result.Statement.SQL.String())
+	}
+}
+
 func TestPluckWithSelect(t *testing.T) {
 	users := []User{
 		{Name: "pluck_with_select_1", Age: 25},
@@ -552,7 +742,7 @@ func TestPluckWithSelect(t *testing.T) {
 	DB.Create(&users)
 
 	var userAges []int
-	err := DB.Model(&User{}).Where("name like ?", "pluck_with_select%").Select("age + 1  as user_age").Pluck("user_age", &userAges).Error
+	err := DB.Model(&User{}).Where("name like ?", "pluck_with_select%").Select("age + 1 as user_age").Pluck("user_age", &userAges).Error
 	if err != nil {
 		t.Fatalf("got error when pluck user_age: %v", err)
 	}
@@ -665,7 +855,17 @@ func TestSearchWithEmptyChain(t *testing.T) {
 func TestOrder(t *testing.T) {
 	dryDB := DB.Session(&gorm.Session{DryRun: true})
 
-	result := dryDB.Order("age desc, name").Find(&User{})
+	result := dryDB.Order("").Find(&User{})
+	if !regexp.MustCompile("SELECT \\* FROM .*users.* IS NULL$").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build Order condition, but got %v", result.Statement.SQL.String())
+	}
+
+	result = dryDB.Order(nil).Find(&User{})
+	if !regexp.MustCompile("SELECT \\* FROM .*users.* IS NULL$").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build Order condition, but got %v", result.Statement.SQL.String())
+	}
+
+	result = dryDB.Order("age desc, name").Find(&User{})
 	if !regexp.MustCompile("SELECT \\* FROM .*users.* ORDER BY age desc, name").MatchString(result.Statement.SQL.String()) {
 		t.Fatalf("Build Order condition, but got %v", result.Statement.SQL.String())
 	}
@@ -681,6 +881,31 @@ func TestOrder(t *testing.T) {
 
 	explainedSQL := dryDB.Dialector.Explain(stmt.SQL.String(), stmt.Vars...)
 	if !regexp.MustCompile("SELECT \\* FROM .*users.* ORDER BY FIELD\\(id,1,2,3\\)").MatchString(explainedSQL) {
+		t.Fatalf("Build Order condition, but got %v", explainedSQL)
+	}
+}
+
+func TestOrderWithAllFields(t *testing.T) {
+	dryDB := DB.Session(&gorm.Session{DryRun: true, QueryFields: true})
+	userQuery := "SELECT .*users.*id.*users.*created_at.*users.*updated_at.*users.*deleted_at.*users.*name.*users.*age" +
+		".*users.*birthday.*users.*company_id.*users.*manager_id.*users.*active.* FROM .*users.* "
+
+	result := dryDB.Order("users.age desc, users.name").Find(&User{})
+	if !regexp.MustCompile(userQuery + "users.age desc, users.name").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build Order condition, but got %v", result.Statement.SQL.String())
+	}
+
+	result = dryDB.Order("users.age desc").Order("users.name").Find(&User{})
+	if !regexp.MustCompile(userQuery + "ORDER BY users.age desc,users.name").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build Order condition, but got %v", result.Statement.SQL.String())
+	}
+
+	stmt := dryDB.Clauses(clause.OrderBy{
+		Expression: clause.Expr{SQL: "FIELD(id,?)", Vars: []interface{}{[]int{1, 2, 3}}, WithoutParentheses: true},
+	}).Find(&User{}).Statement
+
+	explainedSQL := dryDB.Dialector.Explain(stmt.SQL.String(), stmt.Vars...)
+	if !regexp.MustCompile(userQuery + "ORDER BY FIELD\\(id,1,2,3\\)").MatchString(explainedSQL) {
 		t.Fatalf("Build Order condition, but got %v", explainedSQL)
 	}
 }
@@ -767,6 +992,30 @@ func TestSearchWithMap(t *testing.T) {
 	}
 }
 
+func TestSearchWithStruct(t *testing.T) {
+	dryRunDB := DB.Session(&gorm.Session{DryRun: true})
+
+	result := dryRunDB.Where(User{Name: "jinzhu"}).Find(&User{})
+	if !regexp.MustCompile(`WHERE .users.\..name. = .{1,3} AND .users.\..deleted_at. IS NULL`).MatchString(result.Statement.SQL.String()) {
+		t.Errorf("invalid query SQL, got %v", result.Statement.SQL.String())
+	}
+
+	result = dryRunDB.Where(User{Name: "jinzhu", Age: 18}).Find(&User{})
+	if !regexp.MustCompile(`WHERE .users.\..name. = .{1,3} AND .users.\..age. = .{1,3} AND .users.\..deleted_at. IS NULL`).MatchString(result.Statement.SQL.String()) {
+		t.Errorf("invalid query SQL, got %v", result.Statement.SQL.String())
+	}
+
+	result = dryRunDB.Where(User{Name: "jinzhu"}, "name", "Age").Find(&User{})
+	if !regexp.MustCompile(`WHERE .users.\..name. = .{1,3} AND .users.\..age. = .{1,3} AND .users.\..deleted_at. IS NULL`).MatchString(result.Statement.SQL.String()) {
+		t.Errorf("invalid query SQL, got %v", result.Statement.SQL.String())
+	}
+
+	result = dryRunDB.Where(User{Name: "jinzhu"}, "age").Find(&User{})
+	if !regexp.MustCompile(`WHERE .users.\..age. = .{1,3} AND .users.\..deleted_at. IS NULL`).MatchString(result.Statement.SQL.String()) {
+		t.Errorf("invalid query SQL, got %v", result.Statement.SQL.String())
+	}
+}
+
 func TestSubQuery(t *testing.T) {
 	users := []User{
 		{Name: "subquery_1", Age: 10},
@@ -803,7 +1052,16 @@ func TestSubQueryWithRaw(t *testing.T) {
 	DB.Create(&users)
 
 	var count int64
-	err := DB.Raw("select count(*) from (?) tmp",
+	err := DB.Raw("select count(*) from (?) tmp where 1 = ? AND name IN (?)", DB.Raw("select name from users where age >= ? and name in (?)", 10, []string{"subquery_raw_1", "subquery_raw_2", "subquery_raw_3"}), 1, DB.Raw("select name from users where age >= ? and name in (?)", 20, []string{"subquery_raw_1", "subquery_raw_2", "subquery_raw_3"})).Scan(&count).Error
+	if err != nil {
+		t.Errorf("Expected to get no errors, but got %v", err)
+	}
+
+	if count != 2 {
+		t.Errorf("Row count must be 2, instead got %d", count)
+	}
+
+	err = DB.Raw("select count(*) from (?) tmp",
 		DB.Table("users").
 			Select("name").
 			Where("age >= ? and name in (?)", 20, []string{"subquery_raw_1", "subquery_raw_3"}).
@@ -891,4 +1149,50 @@ func TestQueryWithTableAndConditions(t *testing.T) {
 	if !regexp.MustCompile(`SELECT \* FROM .user. WHERE .user.\..name. = .+ AND .user.\..deleted_at. IS NULL`).MatchString(result.Statement.SQL.String()) {
 		t.Errorf("invalid query SQL, got %v", result.Statement.SQL.String())
 	}
+}
+
+func TestQueryWithTableAndConditionsAndAllFields(t *testing.T) {
+	result := DB.Session(&gorm.Session{DryRun: true, QueryFields: true}).Table("user").Find(&User{}, User{Name: "jinzhu"})
+	userQuery := "SELECT .*user.*id.*user.*created_at.*user.*updated_at.*user.*deleted_at.*user.*name.*user.*age" +
+		".*user.*birthday.*user.*company_id.*user.*manager_id.*user.*active.* FROM .user. "
+
+	if !regexp.MustCompile(userQuery + `WHERE .user.\..name. = .+ AND .user.\..deleted_at. IS NULL`).MatchString(result.Statement.SQL.String()) {
+		t.Errorf("invalid query SQL, got %v", result.Statement.SQL.String())
+	}
+}
+
+type DoubleInt64 struct {
+	data int64
+}
+
+func (t *DoubleInt64) Scan(val interface{}) error {
+	switch v := val.(type) {
+	case int64:
+		t.data = v * 2
+		return nil
+	default:
+		return fmt.Errorf("DoubleInt64 cant not scan with:%v", v)
+	}
+}
+
+// https://github.com/go-gorm/gorm/issues/5091
+func TestQueryScannerWithSingleColumn(t *testing.T) {
+	user := User{Name: "scanner_raw_1", Age: 10}
+	DB.Create(&user)
+
+	var result1 DoubleInt64
+	if err := DB.Model(&User{}).Where("name LIKE ?", "scanner_raw_%").Limit(1).Pluck(
+		"age", &result1).Error; err != nil {
+		t.Errorf("Failed, got error: %v", err)
+	}
+
+	AssertEqual(t, result1.data, 20)
+
+	var result2 DoubleInt64
+	if err := DB.Model(&User{}).Where("name LIKE ?", "scanner_raw_%").Limit(1).Select(
+		"age").Scan(&result2).Error; err != nil {
+		t.Errorf("Failed, got error: %v", err)
+	}
+
+	AssertEqual(t, result2.data, 20)
 }

@@ -1,6 +1,7 @@
 package tests_test
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"regexp"
@@ -27,6 +28,10 @@ func TestSoftDelete(t *testing.T) {
 
 	if err := DB.Delete(&user).Error; err != nil {
 		t.Fatalf("No error should happen when soft delete user, but got %v", err)
+	}
+
+	if sql.NullTime(user.DeletedAt).Time.IsZero() {
+		t.Fatalf("user's deleted at is zero")
 	}
 
 	sql := DB.Session(&gorm.Session{DryRun: true}).Delete(&user).Statement.SQL.String()
@@ -76,5 +81,15 @@ func TestDeletedAtUnMarshal(t *testing.T) {
 	_ = json.Unmarshal(b, result)
 	if result.DeletedAt != expected.DeletedAt {
 		t.Errorf("Failed, result.DeletedAt: %v is not same as expected.DeletedAt: %v", result.DeletedAt, expected.DeletedAt)
+	}
+}
+
+func TestDeletedAtOneOr(t *testing.T) {
+	actualSQL := DB.ToSQL(func(tx *gorm.DB) *gorm.DB {
+		return tx.Or("id = ?", 1).Find(&User{})
+	})
+
+	if !regexp.MustCompile(` WHERE id = 1 AND .users.\..deleted_at. IS NULL`).MatchString(actualSQL) {
+		t.Fatalf("invalid sql generated, got %v", actualSQL)
 	}
 }
