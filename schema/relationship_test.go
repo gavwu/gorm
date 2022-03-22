@@ -93,6 +93,20 @@ func TestBelongsToWithOnlyReferences2(t *testing.T) {
 	})
 }
 
+func TestSelfReferentialBelongsTo(t *testing.T) {
+	type User struct {
+		ID        int32 `gorm:"primaryKey"`
+		Name      string
+		CreatorID *int32
+		Creator   *User
+	}
+
+	checkStructRelation(t, &User{}, Relation{
+		Name: "Creator", Type: schema.BelongsTo, Schema: "User", FieldSchema: "User",
+		References: []Reference{{"ID", "User", "CreatorID", "User", "", false}},
+	})
+}
+
 func TestSelfReferentialBelongsToOverrideReferences(t *testing.T) {
 	type User struct {
 		ID        int32 `gorm:"primaryKey"`
@@ -141,6 +155,24 @@ func TestHasOneOverrideReferences(t *testing.T) {
 	checkStructRelation(t, &User{}, Relation{
 		Name: "Profile", Type: schema.HasOne, Schema: "User", FieldSchema: "Profile",
 		References: []Reference{{"Refer", "User", "UserID", "Profile", "", true}},
+	})
+}
+
+func TestHasOneOverrideReferences2(t *testing.T) {
+	type Profile struct {
+		gorm.Model
+		Name string
+	}
+
+	type User struct {
+		gorm.Model
+		ProfileID uint     `gorm:"column:profile_id"`
+		Profile   *Profile `gorm:"foreignKey:ID;references:ProfileID"`
+	}
+
+	checkStructRelation(t, &User{}, Relation{
+		Name: "Profile", Type: schema.HasOne, Schema: "User", FieldSchema: "Profile",
+		References: []Reference{{"ProfileID", "User", "ID", "Profile", "", true}},
 	})
 }
 
@@ -459,6 +491,26 @@ func TestEmbeddedRelation(t *testing.T) {
 	}
 }
 
+func TestVariableRelation(t *testing.T) {
+	var result struct {
+		User
+	}
+
+	checkStructRelation(t, &result, Relation{
+		Name: "Account", Type: schema.HasOne, Schema: "", FieldSchema: "Account",
+		References: []Reference{
+			{"ID", "", "UserID", "Account", "", true},
+		},
+	})
+
+	checkStructRelation(t, &result, Relation{
+		Name: "Company", Type: schema.BelongsTo, Schema: "", FieldSchema: "Company",
+		References: []Reference{
+			{"ID", "Company", "CompanyID", "", "", false},
+		},
+	})
+}
+
 func TestSameForeignKey(t *testing.T) {
 	type UserAux struct {
 		gorm.Model
@@ -481,4 +533,102 @@ func TestSameForeignKey(t *testing.T) {
 			},
 		},
 	)
+}
+
+func TestBelongsToSameForeignKey(t *testing.T) {
+	type User struct {
+		gorm.Model
+		Name string
+		UUID string
+	}
+
+	type UserAux struct {
+		gorm.Model
+		Aux  string
+		UUID string
+		User User `gorm:"ForeignKey:UUID;references:UUID;belongsTo"`
+	}
+
+	checkStructRelation(t, &UserAux{},
+		Relation{
+			Name: "User", Type: schema.BelongsTo, Schema: "UserAux", FieldSchema: "User",
+			References: []Reference{
+				{"UUID", "User", "UUID", "UserAux", "", false},
+			},
+		},
+	)
+}
+
+func TestHasOneWithSameForeignKey(t *testing.T) {
+	type Profile struct {
+		gorm.Model
+		Name         string
+		ProfileRefer int // not used in relationship
+	}
+
+	type User struct {
+		gorm.Model
+		Profile      Profile `gorm:"ForeignKey:ID;references:ProfileRefer"`
+		ProfileRefer int
+	}
+
+	checkStructRelation(t, &User{}, Relation{
+		Name: "Profile", Type: schema.HasOne, Schema: "User", FieldSchema: "Profile",
+		References: []Reference{{"ProfileRefer", "User", "ID", "Profile", "", true}},
+	})
+}
+
+func TestHasManySameForeignKey(t *testing.T) {
+	type Profile struct {
+		gorm.Model
+		Name      string
+		UserRefer uint
+	}
+
+	type User struct {
+		gorm.Model
+		UserRefer uint
+		Profile   []Profile `gorm:"ForeignKey:UserRefer"`
+	}
+
+	checkStructRelation(t, &User{}, Relation{
+		Name: "Profile", Type: schema.HasMany, Schema: "User", FieldSchema: "Profile",
+		References: []Reference{{"ID", "User", "UserRefer", "Profile", "", true}},
+	})
+}
+
+type Author struct {
+	gorm.Model
+}
+
+type Book struct {
+	gorm.Model
+	Author   Author
+	AuthorID uint
+}
+
+func (Book) TableName() string {
+	return "my_schema.a_very_very_very_very_very_very_very_very_long_table_name"
+}
+
+func TestParseConstraintNameWithSchemaQualifiedLongTableName(t *testing.T) {
+	s, err := schema.Parse(
+		&Book{},
+		&sync.Map{},
+		schema.NamingStrategy{},
+	)
+	if err != nil {
+		t.Fatalf("Failed to parse schema")
+	}
+
+	expectedConstraintName := "fk_my_schema_a_very_very_very_very_very_very_very_very_l4db13eec"
+	constraint := s.Relationships.Relations["Author"].ParseConstraint()
+
+	if constraint.Name != expectedConstraintName {
+		t.Fatalf(
+			"expected constraint name %s, got %s",
+			expectedConstraintName,
+			constraint.Name,
+		)
+	}
 }

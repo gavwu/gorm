@@ -1,6 +1,7 @@
 package tests_test
 
 import (
+	"database/sql"
 	"testing"
 	"time"
 
@@ -9,7 +10,7 @@ import (
 )
 
 func TestUpdateHasOne(t *testing.T) {
-	var user = *GetUser("update-has-one", Config{})
+	user := *GetUser("update-has-one", Config{})
 
 	if err := DB.Create(&user).Error; err != nil {
 		t.Fatalf("errors happened when create: %v", err)
@@ -34,7 +35,7 @@ func TestUpdateHasOne(t *testing.T) {
 	DB.Preload("Account").Find(&user3, "id = ?", user.ID)
 
 	CheckUser(t, user2, user3)
-	var lastUpdatedAt = user2.Account.UpdatedAt
+	lastUpdatedAt := user2.Account.UpdatedAt
 	time.Sleep(time.Second)
 
 	if err := DB.Session(&gorm.Session{FullSaveAssociations: true}).Save(&user).Error; err != nil {
@@ -52,7 +53,7 @@ func TestUpdateHasOne(t *testing.T) {
 	}
 
 	t.Run("Polymorphic", func(t *testing.T) {
-		var pet = Pet{Name: "create"}
+		pet := Pet{Name: "create"}
 
 		if err := DB.Create(&pet).Error; err != nil {
 			t.Fatalf("errors happened when create: %v", err)
@@ -84,5 +85,49 @@ func TestUpdateHasOne(t *testing.T) {
 		var pet4 Pet
 		DB.Preload("Toy").Find(&pet4, "id = ?", pet.ID)
 		CheckPet(t, pet4, pet)
+	})
+
+	t.Run("Restriction", func(t *testing.T) {
+		type CustomizeAccount struct {
+			gorm.Model
+			UserID sql.NullInt64
+			Number string `gorm:"<-:create"`
+		}
+
+		type CustomizeUser struct {
+			gorm.Model
+			Name    string
+			Account CustomizeAccount `gorm:"foreignkey:UserID"`
+		}
+
+		DB.Migrator().DropTable(&CustomizeUser{})
+		DB.Migrator().DropTable(&CustomizeAccount{})
+
+		if err := DB.AutoMigrate(&CustomizeUser{}); err != nil {
+			t.Fatalf("failed to migrate, got error: %v", err)
+		}
+		if err := DB.AutoMigrate(&CustomizeAccount{}); err != nil {
+			t.Fatalf("failed to migrate, got error: %v", err)
+		}
+
+		number := "number-has-one-associations"
+		cusUser := CustomizeUser{
+			Name: "update-has-one-associations",
+			Account: CustomizeAccount{
+				Number: number,
+			},
+		}
+
+		if err := DB.Create(&cusUser).Error; err != nil {
+			t.Fatalf("errors happened when create: %v", err)
+		}
+		cusUser.Account.Number += "-update"
+		if err := DB.Session(&gorm.Session{FullSaveAssociations: true}).Updates(&cusUser).Error; err != nil {
+			t.Fatalf("errors happened when create: %v", err)
+		}
+
+		var account2 CustomizeAccount
+		DB.Find(&account2, "user_id = ?", cusUser.ID)
+		AssertEqual(t, account2.Number, number)
 	})
 }

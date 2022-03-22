@@ -1,6 +1,7 @@
 package tests_test
 
 import (
+	"context"
 	"testing"
 
 	"gorm.io/gorm"
@@ -22,7 +23,7 @@ func NameIn(names []string) func(d *gorm.DB) *gorm.DB {
 }
 
 func TestScopes(t *testing.T) {
-	var users = []*User{
+	users := []*User{
 		GetUser("ScopeUser1", Config{}),
 		GetUser("ScopeUser2", Config{}),
 		GetUser("ScopeUser3", Config{}),
@@ -53,5 +54,21 @@ func TestScopes(t *testing.T) {
 	db.AutoMigrate(&User{})
 	if db.Find(&User{}).Statement.Table != "custom_table" {
 		t.Errorf("failed to call Scopes")
+	}
+
+	result := DB.Scopes(NameIn1And2, func(tx *gorm.DB) *gorm.DB {
+		return tx.Session(&gorm.Session{})
+	}).Find(&users1)
+
+	if result.RowsAffected != 2 {
+		t.Errorf("Should found two users's name in 1, 2, but got %v", result.RowsAffected)
+	}
+
+	var maxId int64
+	userTable := func(db *gorm.DB) *gorm.DB {
+		return db.WithContext(context.Background()).Table("users")
+	}
+	if err := DB.Scopes(userTable).Select("max(id)").Scan(&maxId).Error; err != nil {
+		t.Errorf("select max(id)")
 	}
 }

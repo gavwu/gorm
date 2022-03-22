@@ -17,7 +17,7 @@ import (
 )
 
 func TestFind(t *testing.T) {
-	var users = []User{
+	users := []User{
 		*GetUser("find", Config{}),
 		*GetUser("find", Config{}),
 		*GetUser("find", Config{}),
@@ -57,7 +57,7 @@ func TestFind(t *testing.T) {
 	}
 
 	t.Run("FirstMap", func(t *testing.T) {
-		var first = map[string]interface{}{}
+		first := map[string]interface{}{}
 		if err := DB.Model(&User{}).Where("name = ?", "find").First(first).Error; err != nil {
 			t.Errorf("errors happened when query first: %v", err)
 		} else {
@@ -88,7 +88,7 @@ func TestFind(t *testing.T) {
 	})
 
 	t.Run("FirstMapWithTable", func(t *testing.T) {
-		var first = map[string]interface{}{}
+		first := map[string]interface{}{}
 		if err := DB.Table("users").Where("name = ?", "find").Find(first).Error; err != nil {
 			t.Errorf("errors happened when query first: %v", err)
 		} else {
@@ -120,7 +120,7 @@ func TestFind(t *testing.T) {
 	})
 
 	t.Run("FirstPtrMap", func(t *testing.T) {
-		var first = map[string]interface{}{}
+		first := map[string]interface{}{}
 		if err := DB.Model(&User{}).Where("name = ?", "find").First(&first).Error; err != nil {
 			t.Errorf("errors happened when query first: %v", err)
 		} else {
@@ -135,7 +135,7 @@ func TestFind(t *testing.T) {
 	})
 
 	t.Run("FirstSliceOfMap", func(t *testing.T) {
-		var allMap = []map[string]interface{}{}
+		allMap := []map[string]interface{}{}
 		if err := DB.Model(&User{}).Where("name = ?", "find").Find(&allMap).Error; err != nil {
 			t.Errorf("errors happened when query find: %v", err)
 		} else {
@@ -170,7 +170,7 @@ func TestFind(t *testing.T) {
 	})
 
 	t.Run("FindSliceOfMapWithTable", func(t *testing.T) {
-		var allMap = []map[string]interface{}{}
+		allMap := []map[string]interface{}{}
 		if err := DB.Table("users").Where("name = ?", "find").Find(&allMap).Error; err != nil {
 			t.Errorf("errors happened when query find: %v", err)
 		} else {
@@ -241,7 +241,7 @@ func TestQueryWithAssociation(t *testing.T) {
 }
 
 func TestFindInBatches(t *testing.T) {
-	var users = []User{
+	users := []User{
 		*GetUser("find_in_batches", Config{}),
 		*GetUser("find_in_batches", Config{}),
 		*GetUser("find_in_batches", Config{}),
@@ -297,7 +297,7 @@ func TestFindInBatchesWithError(t *testing.T) {
 		t.Skip("skip sqlserver due to it will raise data race for invalid sql")
 	}
 
-	var users = []User{
+	users := []User{
 		*GetUser("find_in_batches_with_error", Config{}),
 		*GetUser("find_in_batches_with_error", Config{}),
 		*GetUser("find_in_batches_with_error", Config{}),
@@ -436,6 +436,11 @@ func TestNot(t *testing.T) {
 		t.Fatalf("Build NOT condition, but got %v", result.Statement.SQL.String())
 	}
 
+	result = dryDB.Not(map[string]interface{}{"name": []string{}}).Find(&User{})
+	if !regexp.MustCompile("SELECT \\* FROM .*users.* WHERE .*name.* IS NOT NULL").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build NOT condition, but got %v", result.Statement.SQL.String())
+	}
+
 	result = dryDB.Not(map[string]interface{}{"name": []string{"jinzhu", "jinzhu 2"}}).Find(&User{})
 	if !regexp.MustCompile("SELECT \\* FROM .*users.* WHERE .*name.* NOT IN \\(.+,.+\\)").MatchString(result.Statement.SQL.String()) {
 		t.Fatalf("Build NOT condition, but got %v", result.Statement.SQL.String())
@@ -507,7 +512,13 @@ func TestNotWithAllFields(t *testing.T) {
 func TestOr(t *testing.T) {
 	dryDB := DB.Session(&gorm.Session{DryRun: true})
 
-	result := dryDB.Where("role = ?", "admin").Where(DB.Or("role = ?", "super_admin")).Find(&User{})
+	var count int64
+	result := dryDB.Model(&User{}).Or("role = ?", "admin").Count(&count)
+	if !regexp.MustCompile("SELECT count\\(\\*\\) FROM .*users.* WHERE role = .+ AND .*users.*\\..*deleted_at.* IS NULL").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build OR condition, but got %v", result.Statement.SQL.String())
+	}
+
+	result = dryDB.Where("role = ?", "admin").Where(DB.Or("role = ?", "super_admin")).Find(&User{})
 	if !regexp.MustCompile("SELECT \\* FROM .*users.* WHERE .*role.* = .+ AND .*role.* = .+").MatchString(result.Statement.SQL.String()) {
 		t.Fatalf("Build OR condition, but got %v", result.Statement.SQL.String())
 	}
@@ -572,7 +583,9 @@ func TestPluck(t *testing.T) {
 	if err := DB.Model(User{}).Where("name like ?", "pluck-user%").Order("name desc").Pluck("name", &names2).Error; err != nil {
 		t.Errorf("got error when pluck name: %v", err)
 	}
-	AssertEqual(t, names, sort.Reverse(sort.StringSlice(names2)))
+
+	sort.Slice(names2, func(i, j int) bool { return names2[i] < names2[j] })
+	AssertEqual(t, names, names2)
 
 	var ids []int
 	if err := DB.Model(User{}).Where("name like ?", "pluck-user%").Pluck("id", &ids).Error; err != nil {
@@ -842,7 +855,17 @@ func TestSearchWithEmptyChain(t *testing.T) {
 func TestOrder(t *testing.T) {
 	dryDB := DB.Session(&gorm.Session{DryRun: true})
 
-	result := dryDB.Order("age desc, name").Find(&User{})
+	result := dryDB.Order("").Find(&User{})
+	if !regexp.MustCompile("SELECT \\* FROM .*users.* IS NULL$").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build Order condition, but got %v", result.Statement.SQL.String())
+	}
+
+	result = dryDB.Order(nil).Find(&User{})
+	if !regexp.MustCompile("SELECT \\* FROM .*users.* IS NULL$").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build Order condition, but got %v", result.Statement.SQL.String())
+	}
+
+	result = dryDB.Order("age desc, name").Find(&User{})
 	if !regexp.MustCompile("SELECT \\* FROM .*users.* ORDER BY age desc, name").MatchString(result.Statement.SQL.String()) {
 		t.Fatalf("Build Order condition, but got %v", result.Statement.SQL.String())
 	}
@@ -1136,4 +1159,40 @@ func TestQueryWithTableAndConditionsAndAllFields(t *testing.T) {
 	if !regexp.MustCompile(userQuery + `WHERE .user.\..name. = .+ AND .user.\..deleted_at. IS NULL`).MatchString(result.Statement.SQL.String()) {
 		t.Errorf("invalid query SQL, got %v", result.Statement.SQL.String())
 	}
+}
+
+type DoubleInt64 struct {
+	data int64
+}
+
+func (t *DoubleInt64) Scan(val interface{}) error {
+	switch v := val.(type) {
+	case int64:
+		t.data = v * 2
+		return nil
+	default:
+		return fmt.Errorf("DoubleInt64 cant not scan with:%v", v)
+	}
+}
+
+// https://github.com/go-gorm/gorm/issues/5091
+func TestQueryScannerWithSingleColumn(t *testing.T) {
+	user := User{Name: "scanner_raw_1", Age: 10}
+	DB.Create(&user)
+
+	var result1 DoubleInt64
+	if err := DB.Model(&User{}).Where("name LIKE ?", "scanner_raw_%").Limit(1).Pluck(
+		"age", &result1).Error; err != nil {
+		t.Errorf("Failed, got error: %v", err)
+	}
+
+	AssertEqual(t, result1.data, 20)
+
+	var result2 DoubleInt64
+	if err := DB.Model(&User{}).Where("name LIKE ?", "scanner_raw_%").Limit(1).Select(
+		"age").Scan(&result2).Error; err != nil {
+		t.Errorf("Failed, got error: %v", err)
+	}
+
+	AssertEqual(t, result2.data, 20)
 }
