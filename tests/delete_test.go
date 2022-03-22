@@ -10,7 +10,7 @@ import (
 )
 
 func TestDelete(t *testing.T) {
-	var users = []User{*GetUser("delete", Config{}), *GetUser("delete", Config{}), *GetUser("delete", Config{})}
+	users := []User{*GetUser("delete", Config{}), *GetUser("delete", Config{}), *GetUser("delete", Config{})}
 
 	if err := DB.Create(&users).Error; err != nil {
 		t.Errorf("errors happened when create: %v", err)
@@ -22,8 +22,8 @@ func TestDelete(t *testing.T) {
 		}
 	}
 
-	if err := DB.Delete(&users[1]).Error; err != nil {
-		t.Errorf("errors happened when delete: %v", err)
+	if res := DB.Delete(&users[1]); res.Error != nil || res.RowsAffected != 1 {
+		t.Errorf("errors happened when delete: %v, affected: %v", res.Error, res.RowsAffected)
 	}
 
 	var result User
@@ -45,7 +45,7 @@ func TestDelete(t *testing.T) {
 		}
 	}
 
-	if err := DB.Delete(users[0]).Error; err != nil {
+	if err := DB.Delete(&users[0]).Error; err != nil {
 		t.Errorf("errors happened when delete: %v", err)
 	}
 
@@ -153,6 +153,30 @@ func TestDeleteWithAssociations(t *testing.T) {
 	}
 }
 
+func TestDeleteAssociationsWithUnscoped(t *testing.T) {
+	user := GetUser("unscoped_delete_with_associations", Config{Account: true, Pets: 2, Toys: 4, Company: true, Manager: true, Team: 1, Languages: 1, Friends: 1})
+
+	if err := DB.Create(user).Error; err != nil {
+		t.Fatalf("failed to create user, got error %v", err)
+	}
+
+	if err := DB.Unscoped().Select(clause.Associations, "Pets.Toy").Delete(&user).Error; err != nil {
+		t.Fatalf("failed to delete user, got error %v", err)
+	}
+
+	for key, value := range map[string]int64{"Account": 0, "Pets": 0, "Toys": 0, "Company": 1, "Manager": 1, "Team": 0, "Languages": 0, "Friends": 0} {
+		if count := DB.Unscoped().Model(&user).Association(key).Count(); count != value {
+			t.Errorf("user's %v expects: %v, got %v", key, value, count)
+		}
+	}
+
+	for key, value := range map[string]int64{"Account": 0, "Pets": 0, "Toys": 0, "Company": 1, "Manager": 1, "Team": 0, "Languages": 0, "Friends": 0} {
+		if count := DB.Model(&user).Association(key).Count(); count != value {
+			t.Errorf("user's %v expects: %v, got %v", key, value, count)
+		}
+	}
+}
+
 func TestDeleteSliceWithAssociations(t *testing.T) {
 	users := []User{
 		*GetUser("delete_slice_with_associations1", Config{Account: true, Pets: 4, Toys: 1, Company: true, Manager: true, Team: 1, Languages: 1, Friends: 4}),
@@ -179,5 +203,56 @@ func TestDeleteSliceWithAssociations(t *testing.T) {
 		if count := DB.Model(&users).Association(key).Count(); count != value {
 			t.Errorf("user's %v expects: %v, got %v", key, value, count)
 		}
+	}
+}
+
+// only sqlite, postgres support returning
+func TestSoftDeleteReturning(t *testing.T) {
+	if DB.Dialector.Name() != "sqlite" && DB.Dialector.Name() != "postgres" {
+		return
+	}
+
+	users := []*User{
+		GetUser("delete-returning-1", Config{}),
+		GetUser("delete-returning-2", Config{}),
+		GetUser("delete-returning-3", Config{}),
+	}
+	DB.Create(&users)
+
+	var results []User
+	DB.Where("name IN ?", []string{users[0].Name, users[1].Name}).Clauses(clause.Returning{}).Delete(&results)
+	if len(results) != 2 {
+		t.Errorf("failed to return delete data, got %v", results)
+	}
+
+	var count int64
+	DB.Model(&User{}).Where("name IN ?", []string{users[0].Name, users[1].Name, users[2].Name}).Count(&count)
+	if count != 1 {
+		t.Errorf("failed to delete data, current count %v", count)
+	}
+}
+
+func TestDeleteReturning(t *testing.T) {
+	if DB.Dialector.Name() != "sqlite" && DB.Dialector.Name() != "postgres" {
+		return
+	}
+
+	companies := []Company{
+		{Name: "delete-returning-1"},
+		{Name: "delete-returning-2"},
+		{Name: "delete-returning-3"},
+	}
+	DB.Create(&companies)
+
+	var results []Company
+	DB.Where("name IN ?", []string{companies[0].Name, companies[1].Name}).Clauses(clause.Returning{}).Delete(&results)
+	if len(results) != 2 {
+		t.Errorf("failed to return delete data, got %v", results)
+	}
+
+	var count int64
+	DB.Model(&Company{}).Where("name IN ?", []string{companies[0].Name, companies[1].Name, companies[2].Name}).Count(&count)
+	if count != 1 {
+		t.Errorf("failed to delete data, current count %v", count)
 	}
 }

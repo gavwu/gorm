@@ -57,37 +57,43 @@ func TestJoinsForSlice(t *testing.T) {
 }
 
 func TestJoinConds(t *testing.T) {
-	var user = *GetUser("joins-conds", Config{Account: true, Pets: 3})
+	user := *GetUser("joins-conds", Config{Account: true, Pets: 3})
 	DB.Save(&user)
 
 	var users1 []User
-	DB.Joins("left join pets on pets.user_id = users.id").Where("users.name = ?", user.Name).Find(&users1)
+	DB.Joins("inner join pets on pets.user_id = users.id").Where("users.name = ?", user.Name).Find(&users1)
 	if len(users1) != 3 {
 		t.Errorf("should find two users using left join, but got %v", len(users1))
 	}
 
 	var users2 []User
-	DB.Joins("left join pets on pets.user_id = users.id AND pets.name = ?", user.Pets[0].Name).Where("users.name = ?", user.Name).First(&users2)
+	DB.Joins("inner join pets on pets.user_id = users.id AND pets.name = ?", user.Pets[0].Name).Where("users.name = ?", user.Name).First(&users2)
 	if len(users2) != 1 {
 		t.Errorf("should find one users using left join with conditions, but got %v", len(users2))
 	}
 
 	var users3 []User
-	DB.Joins("left join pets on pets.user_id = users.id AND pets.name = ?", user.Pets[0].Name).Joins("join accounts on accounts.user_id = users.id AND accounts.number = ?", user.Account.Number).Where("users.name = ?", user.Name).First(&users3)
+	DB.Joins("inner join pets on pets.user_id = users.id AND pets.name = ?", user.Pets[0].Name).Joins("join accounts on accounts.user_id = users.id AND accounts.number = ?", user.Account.Number).Where("users.name = ?", user.Name).First(&users3)
 	if len(users3) != 1 {
 		t.Errorf("should find one users using multiple left join conditions, but got %v", len(users3))
 	}
 
 	var users4 []User
-	DB.Joins("left join pets on pets.user_id = users.id AND pets.name = ?", user.Pets[0].Name).Joins("join accounts on accounts.user_id = users.id AND accounts.number = ?", user.Account.Number+"non-exist").Where("users.name = ?", user.Name).First(&users4)
+	DB.Joins("inner join pets on pets.user_id = users.id AND pets.name = ?", user.Pets[0].Name).Joins("join accounts on accounts.user_id = users.id AND accounts.number = ?", user.Account.Number+"non-exist").Where("users.name = ?", user.Name).First(&users4)
 	if len(users4) != 0 {
 		t.Errorf("should find no user when searching with unexisting credit card, but got %v", len(users4))
 	}
 
 	var users5 []User
-	db5 := DB.Joins("left join pets on pets.user_id = users.id AND pets.name = ?", user.Pets[0].Name).Joins("join accounts on accounts.user_id = users.id AND accounts.number = ?", user.Account.Number).Where(User{Model: gorm.Model{ID: 1}}).Where(Account{Model: gorm.Model{ID: 1}}).Not(Pet{Model: gorm.Model{ID: 1}}).Find(&users5)
+	db5 := DB.Joins("inner join pets on pets.user_id = users.id AND pets.name = ?", user.Pets[0].Name).Joins("join accounts on accounts.user_id = users.id AND accounts.number = ?", user.Account.Number).Where(User{Model: gorm.Model{ID: 1}}).Where(Account{Model: gorm.Model{ID: 1}}).Not(Pet{Model: gorm.Model{ID: 1}}).Find(&users5)
 	if db5.Error != nil {
 		t.Errorf("Should not raise error for join where identical fields in different tables. Error: %s", db5.Error.Error())
+	}
+
+	var users6 []User
+	DB.Joins("inner join pets on pets.user_id = users.id AND pets.name = @Name", user.Pets[0]).Where("users.name = ?", user.Name).First(&users6)
+	if len(users6) != 1 {
+		t.Errorf("should find one users using left join with conditions, but got %v", len(users6))
 	}
 
 	dryDB := DB.Session(&gorm.Session{DryRun: true})
@@ -96,6 +102,33 @@ func TestJoinConds(t *testing.T) {
 	if !regexp.MustCompile("SELECT .* FROM .users. left join pets.*join accounts.*").MatchString(stmt.SQL.String()) {
 		t.Errorf("joins should be ordered, but got %v", stmt.SQL.String())
 	}
+
+	iv := DB.Table(`table_invoices`).Select(`seller, SUM(total) as total, SUM(paid) as paid, SUM(balance) as balance`).Group(`seller`)
+	stmt = dryDB.Table(`table_employees`).Select(`id, name, iv.total, iv.paid, iv.balance`).Joins(`LEFT JOIN (?) AS iv ON iv.seller = table_employees.id`, iv).Scan(&user).Statement
+	if !regexp.MustCompile("SELECT id, name, iv.total, iv.paid, iv.balance FROM .table_employees. LEFT JOIN \\(SELECT seller, SUM\\(total\\) as total, SUM\\(paid\\) as paid, SUM\\(balance\\) as balance FROM .table_invoices. GROUP BY .seller.\\) AS iv ON iv.seller = table_employees.id").MatchString(stmt.SQL.String()) {
+		t.Errorf("joins should be ordered, but got %v", stmt.SQL.String())
+	}
+}
+
+func TestJoinOn(t *testing.T) {
+	user := *GetUser("joins-on", Config{Pets: 2})
+	DB.Save(&user)
+
+	var user1 User
+	onQuery := DB.Where(&Pet{Name: "joins-on_pet_1"})
+
+	if err := DB.Joins("NamedPet", onQuery).Where("users.name = ?", user.Name).First(&user1).Error; err != nil {
+		t.Fatalf("Failed to load with joins on, got error: %v", err)
+	}
+
+	AssertEqual(t, user1.NamedPet.Name, "joins-on_pet_1")
+
+	onQuery2 := DB.Where(&Pet{Name: "joins-on_pet_2"})
+	var user2 User
+	if err := DB.Joins("NamedPet", onQuery2).Where("users.name = ?", user.Name).First(&user2).Error; err != nil {
+		t.Fatalf("Failed to load with joins on, got error: %v", err)
+	}
+	AssertEqual(t, user2.NamedPet.Name, "joins-on_pet_2")
 }
 
 func TestJoinsWithSelect(t *testing.T) {
@@ -122,5 +155,77 @@ func TestJoinsWithSelect(t *testing.T) {
 
 	if len(results) != 2 || results[0].Name != user.Pets[0].Name || results[1].Name != user.Pets[1].Name {
 		t.Errorf("Should find all two pets with Join select, got %+v", results)
+	}
+}
+
+func TestJoinWithOmit(t *testing.T) {
+	user := *GetUser("joins_with_omit", Config{Pets: 2})
+	DB.Save(&user)
+
+	results := make([]*User, 0)
+
+	if err := DB.Table("users").Omit("name").Where("users.name = ?", "joins_with_omit").Joins("left join pets on pets.user_id = users.id").Find(&results).Error; err != nil {
+		return
+	}
+
+	if len(results) != 2 || results[0].Name != "" || results[1].Name != "" {
+		t.Errorf("Should find all two pets with Join omit and should not find user's name, got %+v", results)
+		return
+	}
+}
+
+func TestJoinCount(t *testing.T) {
+	companyA := Company{Name: "A"}
+	companyB := Company{Name: "B"}
+	DB.Create(&companyA)
+	DB.Create(&companyB)
+
+	user := User{Name: "kingGo", CompanyID: &companyB.ID}
+	DB.Create(&user)
+
+	query := DB.Model(&User{}).Joins("Company")
+	// Bug happens when .Count is called on a query.
+	// Removing the below two lines or downgrading to gorm v1.20.12 will make this test pass.
+	var total int64
+	query.Count(&total)
+
+	var result User
+
+	// Incorrectly generates a 'SELECT *' query which causes companies.id to overwrite users.id
+	if err := query.First(&result, user.ID).Error; err != nil {
+		t.Fatalf("Failed, got error: %v", err)
+	}
+
+	if result.ID != user.ID {
+		t.Fatalf("result's id, %d, doesn't match user's id, %d", result.ID, user.ID)
+	}
+}
+
+func TestJoinWithSoftDeleted(t *testing.T) {
+	user := GetUser("TestJoinWithSoftDeletedUser", Config{Account: true, NamedPet: true})
+	DB.Create(&user)
+
+	var user1 User
+	DB.Model(&User{}).Joins("NamedPet").Joins("Account").First(&user1, user.ID)
+	if user1.NamedPet == nil || user1.Account.ID == 0 {
+		t.Fatalf("joins NamedPet and Account should not empty:%v", user1)
+	}
+
+	// Account should empty
+	DB.Delete(&user1.Account)
+
+	var user2 User
+	DB.Model(&User{}).Joins("NamedPet").Joins("Account").First(&user2, user.ID)
+	if user2.NamedPet == nil || user2.Account.ID != 0 {
+		t.Fatalf("joins Account should not empty:%v", user2)
+	}
+
+	// NamedPet should empty
+	DB.Delete(&user1.NamedPet)
+
+	var user3 User
+	DB.Model(&User{}).Joins("NamedPet").Joins("Account").First(&user3, user.ID)
+	if user3.NamedPet != nil || user2.Account.ID != 0 {
+		t.Fatalf("joins NamedPet and Account should not empty:%v", user2)
 	}
 }

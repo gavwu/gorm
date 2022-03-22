@@ -41,7 +41,8 @@ func TestTransaction(t *testing.T) {
 		t.Fatalf("Should not find record after rollback, but got %v", err)
 	}
 
-	tx2 := DB.Begin()
+	txDB := DB.Where("fake_name = ?", "fake_name")
+	tx2 := txDB.Session(&gorm.Session{NewDB: true}).Begin()
 	user2 := *GetUser("transaction-2", Config{})
 	if err := tx2.Save(&user2).Error; err != nil {
 		t.Fatalf("No error should raise, but got %v", err)
@@ -276,6 +277,69 @@ func TestNestedTransactionWithBlock(t *testing.T) {
 
 	if err := DB.First(&User{}, "name = ?", user1.Name).Error; err == nil {
 		t.Fatalf("Should not find rollbacked record")
+	}
+
+	if err := DB.First(&User{}, "name = ?", user2.Name).Error; err != nil {
+		t.Fatalf("Should find saved record")
+	}
+}
+
+func TestDisabledNestedTransaction(t *testing.T) {
+	var (
+		user  = *GetUser("transaction-nested", Config{})
+		user1 = *GetUser("transaction-nested-1", Config{})
+		user2 = *GetUser("transaction-nested-2", Config{})
+	)
+
+	if err := DB.Session(&gorm.Session{DisableNestedTransaction: true}).Transaction(func(tx *gorm.DB) error {
+		tx.Create(&user)
+
+		if err := tx.First(&User{}, "name = ?", user.Name).Error; err != nil {
+			t.Fatalf("Should find saved record")
+		}
+
+		if err := tx.Transaction(func(tx1 *gorm.DB) error {
+			tx1.Create(&user1)
+
+			if err := tx1.First(&User{}, "name = ?", user1.Name).Error; err != nil {
+				t.Fatalf("Should find saved record")
+			}
+
+			return errors.New("rollback")
+		}); err == nil {
+			t.Fatalf("nested transaction should returns error")
+		}
+
+		if err := tx.First(&User{}, "name = ?", user1.Name).Error; err != nil {
+			t.Fatalf("Should not rollback record if disabled nested transaction support")
+		}
+
+		if err := tx.Transaction(func(tx2 *gorm.DB) error {
+			tx2.Create(&user2)
+
+			if err := tx2.First(&User{}, "name = ?", user2.Name).Error; err != nil {
+				t.Fatalf("Should find saved record")
+			}
+
+			return nil
+		}); err != nil {
+			t.Fatalf("nested transaction returns error: %v", err)
+		}
+
+		if err := tx.First(&User{}, "name = ?", user2.Name).Error; err != nil {
+			t.Fatalf("Should find saved record")
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("no error should return, but got %v", err)
+	}
+
+	if err := DB.First(&User{}, "name = ?", user.Name).Error; err != nil {
+		t.Fatalf("Should find saved record")
+	}
+
+	if err := DB.First(&User{}, "name = ?", user1.Name).Error; err != nil {
+		t.Fatalf("Should not rollback record if disabled nested transaction support")
 	}
 
 	if err := DB.First(&User{}, "name = ?", user2.Name).Error; err != nil {

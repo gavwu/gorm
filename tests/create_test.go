@@ -2,6 +2,7 @@ package tests_test
 
 import (
 	"errors"
+	"regexp"
 	"testing"
 	"time"
 
@@ -12,7 +13,7 @@ import (
 )
 
 func TestCreate(t *testing.T) {
-	var user = *GetUser("create", Config{})
+	user := *GetUser("create", Config{})
 
 	if results := DB.Create(&user); results.Error != nil {
 		t.Fatalf("errors happened when create: %v", results.Error)
@@ -50,7 +51,39 @@ func TestCreateInBatches(t *testing.T) {
 		*GetUser("create_in_batches_6", Config{Account: true, Pets: 4, Toys: 3, Company: false, Manager: true, Team: 1, Languages: 3, Friends: 0}),
 	}
 
-	DB.CreateInBatches(&users, 2)
+	result := DB.CreateInBatches(&users, 2)
+	if result.RowsAffected != int64(len(users)) {
+		t.Errorf("affected rows should be %v, but got %v", len(users), result.RowsAffected)
+	}
+
+	for _, user := range users {
+		if user.ID == 0 {
+			t.Fatalf("failed to fill user's ID, got %v", user.ID)
+		} else {
+			var newUser User
+			if err := DB.Where("id = ?", user.ID).Preload(clause.Associations).First(&newUser).Error; err != nil {
+				t.Fatalf("errors happened when query: %v", err)
+			} else {
+				CheckUser(t, newUser, user)
+			}
+		}
+	}
+}
+
+func TestCreateInBatchesWithDefaultSize(t *testing.T) {
+	users := []User{
+		*GetUser("create_with_default_batch_size_1", Config{Account: true, Pets: 2, Toys: 3, Company: true, Manager: true, Team: 0, Languages: 1, Friends: 1}),
+		*GetUser("create_with_default_batch_sizs_2", Config{Account: false, Pets: 2, Toys: 4, Company: false, Manager: false, Team: 1, Languages: 3, Friends: 5}),
+		*GetUser("create_with_default_batch_sizs_3", Config{Account: true, Pets: 0, Toys: 3, Company: true, Manager: false, Team: 4, Languages: 0, Friends: 1}),
+		*GetUser("create_with_default_batch_sizs_4", Config{Account: true, Pets: 3, Toys: 0, Company: false, Manager: true, Team: 0, Languages: 3, Friends: 0}),
+		*GetUser("create_with_default_batch_sizs_5", Config{Account: false, Pets: 0, Toys: 3, Company: true, Manager: false, Team: 1, Languages: 3, Friends: 1}),
+		*GetUser("create_with_default_batch_sizs_6", Config{Account: true, Pets: 4, Toys: 3, Company: false, Manager: true, Team: 1, Languages: 3, Friends: 0}),
+	}
+
+	result := DB.Session(&gorm.Session{CreateBatchSize: 2}).Create(&users)
+	if result.RowsAffected != int64(len(users)) {
+		t.Errorf("affected rows should be %v, but got %v", len(users), result.RowsAffected)
+	}
 
 	for _, user := range users {
 		if user.ID == 0 {
@@ -90,7 +123,7 @@ func TestCreateFromMap(t *testing.T) {
 		{"name": "create_from_map_3", "Age": 20},
 	}
 
-	if err := DB.Model(&User{}).Create(datas).Error; err != nil {
+	if err := DB.Model(&User{}).Create(&datas).Error; err != nil {
 		t.Fatalf("failed to create data from slice of map, got error: %v", err)
 	}
 
@@ -106,7 +139,7 @@ func TestCreateFromMap(t *testing.T) {
 }
 
 func TestCreateWithAssociations(t *testing.T) {
-	var user = *GetUser("create_with_associations", Config{
+	user := *GetUser("create_with_associations", Config{
 		Account:   true,
 		Pets:      2,
 		Toys:      3,
@@ -190,7 +223,7 @@ func TestBulkCreatePtrDataWithAssociations(t *testing.T) {
 
 func TestPolymorphicHasOne(t *testing.T) {
 	t.Run("Struct", func(t *testing.T) {
-		var pet = Pet{
+		pet := Pet{
 			Name: "PolymorphicHasOne",
 			Toy:  Toy{Name: "Toy-PolymorphicHasOne"},
 		}
@@ -207,7 +240,7 @@ func TestPolymorphicHasOne(t *testing.T) {
 	})
 
 	t.Run("Slice", func(t *testing.T) {
-		var pets = []Pet{{
+		pets := []Pet{{
 			Name: "PolymorphicHasOne-Slice-1",
 			Toy:  Toy{Name: "Toy-PolymorphicHasOne-Slice-1"},
 		}, {
@@ -236,7 +269,7 @@ func TestPolymorphicHasOne(t *testing.T) {
 	})
 
 	t.Run("SliceOfPtr", func(t *testing.T) {
-		var pets = []*Pet{{
+		pets := []*Pet{{
 			Name: "PolymorphicHasOne-Slice-1",
 			Toy:  Toy{Name: "Toy-PolymorphicHasOne-Slice-1"},
 		}, {
@@ -257,7 +290,7 @@ func TestPolymorphicHasOne(t *testing.T) {
 	})
 
 	t.Run("Array", func(t *testing.T) {
-		var pets = [...]Pet{{
+		pets := [...]Pet{{
 			Name: "PolymorphicHasOne-Array-1",
 			Toy:  Toy{Name: "Toy-PolymorphicHasOne-Array-1"},
 		}, {
@@ -278,7 +311,7 @@ func TestPolymorphicHasOne(t *testing.T) {
 	})
 
 	t.Run("ArrayPtr", func(t *testing.T) {
-		var pets = [...]*Pet{{
+		pets := [...]*Pet{{
 			Name: "PolymorphicHasOne-Array-1",
 			Toy:  Toy{Name: "Toy-PolymorphicHasOne-Array-1"},
 		}, {
@@ -315,12 +348,12 @@ func TestCreateEmptyStruct(t *testing.T) {
 }
 
 func TestCreateEmptySlice(t *testing.T) {
-	var data = []User{}
+	data := []User{}
 	if err := DB.Create(&data).Error; err != gorm.ErrEmptySlice {
 		t.Errorf("no data should be created, got %v", err)
 	}
 
-	var sliceMap = []map[string]interface{}{}
+	sliceMap := []map[string]interface{}{}
 	if err := DB.Model(&User{}).Create(&sliceMap).Error; err != gorm.ErrEmptySlice {
 		t.Errorf("no data should be created, got %v", err)
 	}
@@ -459,5 +492,37 @@ func TestFirstOrCreateWithPrimaryKey(t *testing.T) {
 
 	if companies[0].ID != 101 || companies[1].ID != 102 {
 		t.Errorf("invalid primary key after creating, got %v, %v", companies[0].ID, companies[1].ID)
+	}
+}
+
+func TestCreateFromSubQuery(t *testing.T) {
+	user := User{Name: "jinzhu"}
+
+	DB.Create(&user)
+
+	subQuery := DB.Table("users").Where("name=?", user.Name).Select("id")
+
+	result := DB.Session(&gorm.Session{DryRun: true}).Model(&Pet{}).Create([]map[string]interface{}{
+		{
+			"name":    "cat",
+			"user_id": gorm.Expr("(?)", DB.Table("(?) as tmp", subQuery).Select("@uid:=id")),
+		},
+		{
+			"name":    "dog",
+			"user_id": gorm.Expr("@uid"),
+		},
+	})
+
+	if !regexp.MustCompile(`INSERT INTO .pets. \(.name.,.user_id.\) .*VALUES \(.+,\(SELECT @uid:=id FROM \(SELECT id FROM .users. WHERE name=.+\) as tmp\)\),\(.+,@uid\)`).MatchString(result.Statement.SQL.String()) {
+		t.Errorf("invalid insert SQL, got %v", result.Statement.SQL.String())
+	}
+}
+
+func TestCreateNilPointer(t *testing.T) {
+	var user *User
+
+	err := DB.Create(user).Error
+	if err == nil || err != gorm.ErrInvalidValue {
+		t.Fatalf("it is not ErrInvalidValue")
 	}
 }
